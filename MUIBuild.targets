@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+    <UsingTask TaskName="_BuildMUI"
+               TaskFactory="CodeTaskFactory"
+               AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+        <ParameterGroup>
+            <Language ParameterType="System.String" Required="true"/>
+            <Filenames ParameterType="System.String"/>
+        </ParameterGroup>
+        <Task>
+            <Using Namespace="System"/>
+            <Using Namespace="System.IO"/>
+            <Using Namespace="System.Diagnostics"/>
+            <Using Namespace="System.Globalization"/>
+            <Code Type="Method" Language="cs">
+                <![CDATA[
+                public override bool Execute()
+                {
+                    string outDir     = "$([System.String]::Copy($(OutDir)).Replace("\", "\\"))";
+                    string intDir     = "$([System.String]::Copy($(IntermediateOutputPath)).Replace("\", "\\"))";
+                    string targetPath = "$([System.String]::Copy($(TargetPath)).Replace("\", "\\"))";
+                    string rcConfig   = "$([System.String]::Copy($(_RCConfig)).Replace("\", "\\"))";
+
+                    string files;
+                    if (Filenames == null)
+                    {
+                        files = "$(ProjectName)" + "." + Language + ".rc";
+                    }
+                    else
+                    {
+                        files = Filenames;
+                    }
+
+                    Directory.CreateDirectory(outDir + Language);
+
+                    int lcid = 0;
+                    try
+                    {
+                        CultureInfo ci = new CultureInfo(Language);
+                        lcid = ci.LCID;
+                    }
+                    catch (CultureNotFoundException ex)
+                    {
+                        Log.LogError("Invalid language identifier: " + Language);
+                        return false;
+                    }
+
+                    Process rcProc = new Process();
+                    rcProc.EnableRaisingEvents = false;
+                    rcProc.StartInfo.WindowStyle = ProcessWindowStyle.Hidden;
+                    rcProc.StartInfo.FileName = "rc.exe";
+                    rcProc.StartInfo.Arguments
+                        = "/D _UNICODE /D UNICODE /l 0x" + lcid.ToString("X4") + " /q \"" + rcConfig + "\""
+                        + " /nologo /fo\"" + intDir + "temp.res\" /fm\"" + intDir + "$(ProjectName)" + "." + Language + ".res\""
+                        + " " + files;
+                    Log.LogMessage("RC args: " + rcProc.StartInfo.Arguments);
+                    rcProc.Start();
+                    rcProc.WaitForExit();
+                    if (rcProc.ExitCode != 0)
+                    {
+                        Log.LogError("Failed to compile resources for " + Language + ". Exit code: " + rcProc.ExitCode);
+                        return false;
+                    }
+
+                    Process linkProc = new Process();
+                    linkProc.EnableRaisingEvents = false;
+                    linkProc.StartInfo.WindowStyle = ProcessWindowStyle.Hidden;
+                    linkProc.StartInfo.FileName = "link.exe";
+                    linkProc.StartInfo.Arguments
+                        = "/DLL /NOENTRY /MACHINE:X86 /OUT:\"" + outDir + Language + "\\$(TargetFileName).mui\" \"" + intDir + "$(ProjectName)." + Language + ".res\"";
+                    Log.LogMessage("Link args: " + linkProc.StartInfo.Arguments);
+                    linkProc.Start();
+                    linkProc.WaitForExit();
+                    if (linkProc.ExitCode != 0)
+                    {
+                        Log.LogError("Failed to link compiled resources for " + Language + ". Exit code: " + linkProc.ExitCode);
+                        return false;
+                    }
+
+                    Process muiProc = new Process();
+                    muiProc.EnableRaisingEvents = false;
+                    muiProc.StartInfo.WindowStyle = ProcessWindowStyle.Hidden;
+                    muiProc.StartInfo.FileName = "muirct.exe";
+                    muiProc.StartInfo.Arguments
+                        = "-c \"" + targetPath + "\" -e \"" + outDir + Language + "\\$(TargetFileName).mui\"";
+                    Log.LogMessage("MUI args: " + muiProc.StartInfo.Arguments);
+                    muiProc.Start();
+                    muiProc.WaitForExit();
+                    if (muiProc.ExitCode != 0)
+                    {
+                        Log.LogError("Failed to copy MUI checksum for " + Language + ". Exit code: " + muiProc.ExitCode);
+                        return false;
+                    }
+
+                    return true;
+                }
+                ]]>
+            </Code>
+        </Task>
+    </UsingTask>
+    <UsingTask TaskName="_FinalizePrimaryMUI"
+               TaskFactory="CodeTaskFactory"
+               AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+        <Task>
+            <Using Namespace="System"/>
+            <Using Namespace="System.IO"/>
+            <Using Namespace="System.Diagnostics"/>
+            <Code Type="Method" Language="cs">
+                <![CDATA[
+                public override bool Execute()
+                {
+                    string outDir = "$([System.String]::Copy($(OutDir)).Replace("\", "\\"))";
+                    string intDir = "$([System.String]::Copy($(IntermediateOutputPath)).Replace("\", "\\"))";
+
+                    Directory.CreateDirectory(outDir + "$(_PrimaryLanguage)");
+
+                    var resFiles = Directory.EnumerateFiles(intDir, "*.$(_PrimaryLanguage).res");
+                    string files = "";
+                    foreach (string file in resFiles)
+                    {
+                        files += "\"" + file + "\" ";
+                    }
+
+                    Process proc = new Process();
+                    proc.EnableRaisingEvents = false;
+                    proc.StartInfo.WindowStyle = ProcessWindowStyle.Hidden;
+                    proc.StartInfo.FileName = "link.exe";
+                    proc.StartInfo.Arguments
+                        = "/DLL /NOENTRY /MACHINE:X86 /OUT:\"" + outDir +  "$(_PrimaryLanguage)\\$(TargetFileName).mui\" " + files;
+                    proc.Start();
+                    proc.WaitForExit();
+                    if (proc.ExitCode != 0)
+                    {
+                        Log.LogError(
+                            "Finalization of primary MUI file failed. Exit code: " + proc.ExitCode);
+                        return false;
+                    }
+
+                    return true;
+                }
+                ]]>
+            </Code>
+        </Task>
+    </UsingTask>
+    <Target Name="FinalizePrimaryMUI" BeforeTargets="MUI">
+        <_FinalizePrimaryMUI/>
+    </Target>
+    <ItemDefinitionGroup>
+        <ResourceCompile>
+            <AdditionalOptions>%(AdditionalOptions) /g"$(_PrimaryLanguageID)" /q "$(_RCConfig)" /fm"$(IntermediateOutputPath)%(Filename).$(_PrimaryLanguage).res"</AdditionalOptions>
+        </ResourceCompile>
+    </ItemDefinitionGroup>
+</Project>
