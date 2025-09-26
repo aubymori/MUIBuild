@@ -3,6 +3,9 @@ This is a targets file for MSBuild that makes separation of language resources i
 easy and clean.
 
 ## How to use
+
+Example project available [here](https://github.com/aubymori/MUIExample).
+
 1. Clone this repository into your project (as a submodule if using Git).
 2. In your .vcxproj file, add the following lines before the `ItemGroup` element containing
    the project's `ResourceCompile` directives.
